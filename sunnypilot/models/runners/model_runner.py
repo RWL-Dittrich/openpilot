@@ -1,26 +1,12 @@
-import os
 from abc import abstractmethod, ABC
 
 import numpy as np
 from openpilot.sunnypilot.models.helpers import get_active_bundle
-from openpilot.system.hardware import TICI
 from openpilot.sunnypilot.models.runners.constants import NumpyDict, ShapeDict, CLMemDict, FrameDict, Model, SliceDict, SEND_RAW_PRED
 from openpilot.system.hardware.hw import Paths
 import pickle
 
 CUSTOM_MODEL_PATH = Paths.model_root()
-
-
-# Set QCOM environment variable for TICI devices, potentially enabling hardware acceleration
-USBGPU = "USBGPU" in os.environ
-if USBGPU:
-  os.environ['AMD'] = '1'
-  os.environ['AMD_IFACE'] = 'USB'
-elif TICI:
-  os.environ['QCOM'] = '1'
-else:
-  os.environ['LLVM'] = '1'
-  os.environ['JIT'] = '2'  # TODO: This may cause issues
 
 
 class ModelData:

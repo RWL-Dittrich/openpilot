@@ -41,14 +41,18 @@ jobs:
         run: |
           ${{ env.RUN }} $BASE_IMAGE /bin/bash -c "\
             git config --global --add safe.directory '*' && \
-            scons -j\$(nproc) \
+            curl -LsSf https://astral.sh/uv/install.sh | sh && \
+            export PATH=\"\$HOME/.local/bin:\$PATH\" && \
+            unset VIRTUAL_ENV && \
+            uv sync --frozen --extra tools --extra testing && \
+            uv pip install PyYAML && \
+            uv run scons -j\$(nproc) \
               common/params_pyx.so \
               cereal/ \
               msgq_repo/msgq/ipc_pyx.so \
               msgq_repo/msgq/visionipc/visionipc_pyx.so \
-              selfdrive/pandad/pandad_api_impl.so \
               opendbc_repo/opendbc/dbc/ \
               opendbc_repo/opendbc/car/ && \
             cd .github && \
-            python -m pytest test_psa_routes.py -v --tb=short --noconftest && \
+            uv run python -m pytest test_psa_routes.py -v --tb=short --noconftest && \
             chmod -R 777 /tmp/comma_download_cache"

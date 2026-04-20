@@ -41,18 +41,22 @@ jobs:
         run: |
           ${{ env.RUN }} $BASE_IMAGE /bin/bash -c "\
             git config --global --add safe.directory '*' && \
-            scons -j\$(nproc) \
+            curl -LsSf https://astral.sh/uv/install.sh | sh && \
+            export PATH=\"\$HOME/.local/bin:\$PATH\" && \
+            unset VIRTUAL_ENV && \
+            uv sync --frozen --extra tools && \
+            uv run scons -j\$(nproc) \
               common/params_pyx.so \
               cereal/ \
               msgq_repo/msgq/ipc_pyx.so \
               msgq_repo/msgq/visionipc/visionipc_pyx.so \
-              selfdrive/pandad/pandad_api_impl.so \
               opendbc_repo/opendbc/dbc/ \
               opendbc_repo/opendbc/car/"
 
       - name: Test steering accuracy
         run: |
           ${{ env.RUN }} $BASE_IMAGE /bin/bash -c "\
+            export PATH=\"/tmp/openpilot/.venv/bin:\$PATH\" && \
             cd .github && \
             echo '=== Peugeot e208 2021 ===' && \
             python test_steering_accuracy.py 6a7075a4fdd765ee/0000004e--1f612006dd --cache || true && \

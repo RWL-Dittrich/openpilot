@@ -1,8 +1,9 @@
+import copy
 from cereal import custom
 from opendbc.car import structs, Bus
 from opendbc.can.parser import CANParser
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.psa.values import DBC, CarControllerParams
+from opendbc.car.psa.values import CAR, DBC, CarControllerParams
 from opendbc.car.interfaces import CarStateBase
 
 GearShifter = structs.CarState.GearShifter
@@ -27,15 +28,20 @@ class CarState(CarStateBase):
     ret.standstill = bool(cp_adas.vl['HS2_DYN_UCF_MDD_32D']['VEHICLE_STANDSTILL'])
 
     # gas
-    ret.gasPressed = cp.vl['Dyn_CMM']['P002_Com_rAPP'] > 0
+    ret.gasPressed = cp_cam.vl['DRIVER']['GAS_PEDAL'] > 0
 
     # brake
     ret.brakePressed = bool(cp_cam.vl['Dat_BSI']['P013_MainBrake'])
     ret.parkingBrake = cp.vl['Dyn_EasyMove']['P337_Com_stPrkBrk'] == 1 # 0: disengaged, 1: engaged, 3: brake actuator moving
 
     # steering wheel
-    ret.steeringAngleDeg = cp.vl['STEERING_ALT']['ANGLE'] # EPS
-    ret.steeringRateDeg = cp.vl['STEERING_ALT']['RATE'] * (2 * cp.vl['STEERING_ALT']['RATE_SIGN'] - 1) # convert [0,1] to [-1,1] EPS: rot. speed * rot. sign
+    STEERING_ALT_BUS = {
+      CAR.PSA_PEUGEOT_208: cp.vl,
+      CAR.PSA_PEUGEOT_508: cp_cam.vl,
+    }
+    bus = STEERING_ALT_BUS[self.CP.carFingerprint]
+    ret.steeringAngleDeg = bus['STEERING_ALT']['ANGLE'] # EPS
+    ret.steeringRateDeg  = bus['STEERING_ALT']['RATE'] * (1 - 2 * bus['STEERING_ALT']['RATE_SIGN']) # convert [0,1] to [1,-1] EPS: rot. speed * rot. sign
     ret.steeringTorque = cp.vl['STEERING']['DRIVER_TORQUE']
     ret.steeringTorqueEps = cp.vl['IS_DAT_DIRA']['EPS_TORQUE']
     ret.steeringPressed = self.update_steering_pressed(abs(ret.steeringTorque) > CarControllerParams.STEER_DRIVER_ALLOWANCE, 5)
@@ -44,16 +50,22 @@ class CarState(CarStateBase):
     # cruise
     ret.cruiseState.speed = cp_adas.vl['HS2_DAT_MDD_CMD_452']['SPEED_SETPOINT'] * CV.KPH_TO_MS # set to 255 when ACC is off, -2 kph offset from dash speed
     ret.cruiseState.enabled = cp_adas.vl['HS2_DAT_MDD_CMD_452']['RVV_ACC_ACTIVATION_REQ'] == 1
-    ret.cruiseState.available = cp_adas.vl['HS2_DYN1_MDD_ETAT_2B6']['ACC_STATUS'] > 2
-    ret.cruiseState.nonAdaptive = cp_adas.vl['HS2_DAT_MDD_CMD_452']['LONGITUDINAL_REGULATION_TYPE'] != 3 # 0: None, 1: CC, 2: Limiter, 3: ACC
-    ret.cruiseState.standstill = bool(cp_adas.vl['HS2_DYN_UCF_MDD_32D']['VEHICLE_STANDSTILL'])
-    ret.accFaulted = cp_adas.vl['HS2_DYN_UCF_MDD_32D']['ACC_ETAT_DECEL_OR_ESP_STATUS'] == 3 # 0: Inhibited, 1: Waiting, 2: Active, 3: Fault
+    ret.cruiseState.available = True # not available for CC-only
+    ret.cruiseState.nonAdaptive = False # not available for CC-only
+    ret.cruiseState.standstill = False # not available for CC-only
+    ret.accFaulted = cp_adas.vl['HS2_DYN_UCF_MDD_32D']['ACC_ETAT_DECEL_OR_ESP_STATUS'] == 3
+    # resume request
+    self.hs2_dat_mdd_cmd_452 = copy.copy(cp_adas.vl['HS2_DAT_MDD_CMD_452'])
 
     # gear
     if bool(cp_cam.vl['Dat_BSI']['P103_Com_bRevGear']):
       ret.gearShifter = GearShifter.reverse
     else:
+      # Both D and B are forward-driving gears; always report drive so openpilot stays enabled
       ret.gearShifter = GearShifter.drive
+
+    # Store raw DRIVE signal to echo back on CAN (0: D, 1: B/brake mode)
+    self.lka_drive_mode = int(cp_cam.vl['LANE_KEEP_ASSIST']['DRIVE'])
 
     # blinkers
     blinker = cp_cam.vl['HS2_DAT7_BSI_612']['CDE_CLG_ET_HDC']

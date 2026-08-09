@@ -1011,6 +1011,10 @@ class SafetyTest(SafetyTestBase):
             if attr == 'TestVolkswagenMqbLongSafety' and current_test.startswith(('TestHondaBoschRadarless', 'TestHondaBoschCANFDLong')):
               tx = list(filter(lambda m: m[0] not in [0x30c, ], tx))
 
+            # PSA radar-emulation addrs fall inside ELM327's blanket 0x600-0x800 diagnostic range
+            if attr == 'TestElm327' and current_test.startswith('TestPsa'):
+              tx = list(filter(lambda m: m[0] not in [0x6B6, 0x796], tx))
+
             # TODO: Temporary, should be fixed in panda firmware, safety_honda.h
             if attr.startswith('TestHonda'):
               # exceptions for common msgs across different hondas

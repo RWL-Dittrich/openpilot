@@ -318,6 +318,15 @@ class Car:
       while True:
         self.step()
         self.rk.monitor_time()
+    except KeyboardInterrupt:
+      # re-enable any ECU we knocked out, before pandad drops the car's safety mode.
+      # the manager gives us 5s after SIGINT, far more than this needs
+      if not self.CP.passive and self.initialized_prev:
+        try:
+          self.CI.deinit(self.CP, *self.can_callbacks)
+        except Exception:
+          cloudlog.exception("CarInterface.deinit failed")
+      raise
     finally:
       e.set()
       t.join()

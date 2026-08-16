@@ -189,7 +189,9 @@ class DeveloperLayoutMici(NavScroller):
   def _on_alpha_long_enabled(self, state: bool):
     def do_toggle(_state: bool):
       ui_state.params.put_bool("AlphaLongitudinalEnabled", _state, block=True)
-      restart_needed_callback()
+      if _state:
+        # turning it off, card requests the cycle once it has handed any knocked-out ECU back
+        restart_needed_callback()
       self._update_toggles()
 
     if state:

@@ -308,6 +308,14 @@ class Car:
       self.dynamic_experimental_control = self.params.get_bool("DynamicExperimentalControl")
       self.v_cruise_helper.read_custom_set_speed_params()
 
+      # alpha long was switched off onroad: let the interface re-enable any ECU it knocked
+      # out while we can still transmit, and only then cycle. pandad puts the panda in
+      # NO_OUTPUT as soon as we go offroad, so this cannot wait until shutdown.
+      if self.CP.openpilotLongitudinalControl and not self.params.get_bool("AlphaLongitudinalEnabled"):
+        if self.CI.release_ecus():
+          self.params.put_bool("OnroadCycleRequested", True)
+          break
+
       time.sleep(0.1)
 
   def card_thread(self):
@@ -318,15 +326,6 @@ class Car:
       while True:
         self.step()
         self.rk.monitor_time()
-    except KeyboardInterrupt:
-      # re-enable any ECU we knocked out, before pandad drops the car's safety mode.
-      # the manager gives us 5s after SIGINT, far more than this needs
-      if not self.CP.passive and self.initialized_prev:
-        try:
-          self.CI.deinit(self.CP, *self.can_callbacks)
-        except Exception:
-          cloudlog.exception("CarInterface.deinit failed")
-      raise
     finally:
       e.set()
       t.join()

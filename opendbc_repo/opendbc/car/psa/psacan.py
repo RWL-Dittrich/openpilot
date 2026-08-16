@@ -89,3 +89,16 @@ def create_disable_radar():
   dat.extend([0x0] * (8 - len(dat)))
 
   return CanData(addr, bytes(dat), bus)
+
+
+# Put the radar ECU back into the default session so it resumes broadcasting.
+# Without this it stays in the programming session until the S3 timer expires,
+# measured at 5.22 s after the last 0x6B6 frame, and the ESP flags ACC data
+# invalid for the whole of that gap.
+def create_enable_radar():
+  addr = 0x6B6
+  bus = 1
+  dat = [0x02, 0x10, 0x01, 0x80]
+  dat.extend([0x0] * (8 - len(dat)))
+
+  return CanData(addr, bytes(dat), bus)

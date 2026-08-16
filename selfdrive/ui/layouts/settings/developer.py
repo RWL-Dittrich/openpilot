@@ -190,6 +190,6 @@ class DeveloperLayout(Widget):
       gui_app.push_widget(ConfirmDialog(content, tr("Enable"), rich=True, callback=confirm_callback))
 
     else:
+      # card requests the onroad cycle once it has handed any knocked-out ECU back
       self._params.put_bool("AlphaLongitudinalEnabled", False)
-      self._params.put_bool("OnroadCycleRequested", True)
       self._update_toggles()

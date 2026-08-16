@@ -10,6 +10,10 @@ class CarInterface(CarInterfaceBase):
   CarState = CarState
   CarController = CarController
 
+  def release_ecus(self) -> bool:
+    # hand the ADAS bus back to the radar ECU openpilot longitudinal knocks out
+    return self.CC.release_radar()
+
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
     ret.brand = 'psa'
@@ -18,7 +22,9 @@ class CarInterface(CarInterfaceBase):
 
     ret.dashcamOnly = False
 
-    ret.steerActuatorDelay = 0.35
+    # measured command->wheel-angle lag is ~0.25s at corner speeds (NCC on 200s of engaged
+    # driving, route 7d73189a89fc24fd/0000001a--9eab9524db). 0.35 over-led and cut apexes.
+    ret.steerActuatorDelay = 0.25
     ret.steerLimitTimer = 0.1
     ret.steerAtStandstill = True
 
@@ -31,3 +37,4 @@ class CarInterface(CarInterfaceBase):
     ret.startAccel = 1.0
 
     return ret
+

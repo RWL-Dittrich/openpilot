@@ -175,5 +175,7 @@ class DeveloperLayoutMici(NavScroller):
   def _on_alpha_long_enabled(self, state: bool):
     # TODO: show confirmation dialog before enabling
     ui_state.params.put_bool("AlphaLongitudinalEnabled", state)
-    restart_needed_callback(state)
+    if state:
+      # turning it off: card requests the cycle once it has handed any knocked-out ECU back
+      restart_needed_callback(state)
     self._update_toggles()

@@ -498,6 +498,17 @@ class Car:
       self.safe_mode = self.params.get_bool("SafeMode")
       self.is_metric = self.params.get_bool("IsMetric")
       self.experimental_mode = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl and not self.safe_mode
+
+      # alpha long was switched off onroad: let the interface re-enable any ECU it knocked
+      # out while we can still transmit, and only then cycle. pandad puts the panda in
+      # NO_OUTPUT as soon as we go offroad, so this cannot wait until shutdown.
+      # alphaLongitudinalAvailable guards cars where OP long is not optional: there the param is
+      # always False and the check below would otherwise request an onroad cycle forever
+      if self.CP.alphaLongitudinalAvailable and self.CP.openpilotLongitudinalControl and not self.params.get_bool("AlphaLongitudinalEnabled"):
+        if self.CI.release_ecus():
+          self.params.put_bool("OnroadCycleRequested", True)
+          break
+
       time.sleep(0.1)
 
   def card_thread(self):

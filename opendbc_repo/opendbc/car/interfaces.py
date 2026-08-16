@@ -298,6 +298,15 @@ class CarInterfaceBase(ABC):
   def deinit(CP: structs.CarParams, can_recv: CanRecvCallable, can_send: CanSendCallable):
     """Used to re-enable longitudinal ECUs as needed"""
 
+  def release_ecus(self) -> bool:
+    """Re-enable any ECU knocked out by init(), while still onroad and transmitting.
+
+    Called repeatedly once openpilot longitudinal is switched off mid-drive, and until
+    it returns True. The work belongs in the CarController so it stays the only writer
+    on the bus; this only requests it and reports whether it has finished.
+    """
+    return True
+
   @staticmethod
   def get_steer_feedforward_default(desired_angle, v_ego):
     # Proportional to realigning tire momentum: lateral acceleration.

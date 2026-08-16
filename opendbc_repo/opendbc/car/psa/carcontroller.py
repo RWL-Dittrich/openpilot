@@ -2,7 +2,8 @@ from opendbc.can.packer import CANPacker
 from opendbc.car import Bus, DT_CTRL, structs, make_tester_present_msg
 from opendbc.car.lateral import apply_steer_angle_limits_vm
 from opendbc.car.interfaces import CarControllerBase
-from opendbc.car.psa.psacan import create_lka_steering, create_resume_acc, create_disable_radar, create_HS2_DYN1_MDD_ETAT_2B6, create_HS2_DYN_MDD_ETAT_2F6
+from opendbc.car.psa.psacan import (create_lka_steering, create_resume_acc, create_disable_radar, create_enable_radar,
+                                    create_HS2_DYN1_MDD_ETAT_2B6, create_HS2_DYN_MDD_ETAT_2F6)
 from opendbc.car.psa.values import CarControllerParams
 from opendbc.car.vehicle_model import VehicleModel
 from numpy import interp
@@ -16,6 +17,21 @@ except ImportError:
   sm = None
 
 LongCtrlState = structs.CarControl.Actuators.LongControlState
+
+# pandad leaves the panda in ELM327 mode until card publishes CarParams, measured
+# at 20-174 ms after the first control frame across 20 logged drives. The radar
+# knockout goes to a diagnostic address, which ELM327 lets through, but the
+# emulated 0x2B6/0x2F6 that take the radar's place are rejected until the switch
+# to the PSA safety mode lands. Knocking the radar out inside that window leaves
+# the ADAS bus silent, and the ESP (UC_FREIN) marks its ACC fields invalid after
+# ~150 ms of silence, which openpilot then reports as accFaulted. Hold off well
+# past the worst measured delay before touching the radar.
+RADAR_DISABLE_FRAME = 100  # 1.0 s
+
+# The radar resumed 220-230 ms after the programming session ended in the logs, but that
+# was via the S3 timeout, so allow generous margin. The release ends as soon as the real
+# 0x2B6 reappears, so this only bounds the case where it never does.
+RADAR_ENABLE_TIMEOUT_FRAMES = 200  # 2.0 s
 
 
 def get_safety_CP():
@@ -31,12 +47,32 @@ class CarController(CarControllerBase):
     self.apply_angle_last = 0
     self.lat_active_last = False
     self.engage_frame = 0
-    self.radar_disabled = 0
+    self.radar_disable_sent = False
+    self.radar_disabled = False
+    self.radar_release_requested = False
+    self.radar_released = False
+    self.radar_release_frame = 0
     self.status = 2
     self.bars = 4
 
     # Vehicle model used for lateral limiting
     self.VM = VehicleModel(get_safety_CP())
+
+  def release_radar(self) -> bool:
+    """Put the radar ECU back on the ADAS bus, called once alpha long is switched off.
+
+    Dropping straight off the bus leaves the radar in its programming session until the
+    S3 timer expires ~5 s later, and the ESP (UC_FREIN) marks its ACC fields invalid
+    after ~150 ms of that, which openpilot reports as accFaulted. This has to run while
+    the car is still onroad: pandad puts the panda in NO_OUTPUT the moment deviceState
+    goes offroad, and everything we send after that is rejected.
+
+    Non-blocking, the work happens in update(). Returns True once the radar is back.
+    """
+    if not self.CP.openpilotLongitudinalControl:
+      return True  # nothing was ever knocked out
+    self.radar_release_requested = True
+    return self.radar_released
 
   def update(self, CC, CS, now_nanos, starpilot_toggles):
     can_sends = []
@@ -109,20 +145,34 @@ class CarController(CarControllerBase):
       else:
         self.bars = 4
 
-      # disable radar ECU by setting to programming mode
-      if self.radar_disabled == 0:
-        can_sends.append(create_disable_radar())
-        self.radar_disabled = 1
-
-      # keep radar ECU disabled by sending tester present
-      if self.frame % 100 == 0 and self.frame>0: # TODO check if disable_radar is sent 100 frames before
+      if self.radar_release_requested:
+        # hand the bus back, see release_radar()
+        if not self.radar_released:
+          if not self.radar_disable_sent:
+            self.radar_released = True  # never knocked it out, nothing to hand back
+          else:
+            if self.radar_release_frame == 0:
+              can_sends.append(create_enable_radar())
+            self.radar_release_frame += 1
+            self.radar_released = CS.radar_alive or self.radar_release_frame >= RADAR_ENABLE_TIMEOUT_FRAMES
+      # disable radar ECU by setting to programming mode, see RADAR_DISABLE_FRAME
+      elif not self.radar_disabled:
+        if not self.radar_disable_sent and self.frame >= RADAR_DISABLE_FRAME:
+          can_sends.append(create_disable_radar())
+          self.radar_disable_sent = True
+        # only start emulating once the real radar has actually gone quiet, two
+        # ECUs transmitting 0x2B6 at once would collide on the bus
+        self.radar_disabled = self.radar_disable_sent and not CS.radar_alive
+      elif self.frame % 100 == 0:
+        # keep radar ECU disabled by sending tester present
         can_sends.append(make_tester_present_msg(0x6b6, 1, suppress_response=False))
 
       # Highest torque seen without gas input: ~1000
       # Lowest torque seen without break mode: -560 (but only when transitioning from brake to accel mode, else -248)
       # Lowest brake mode accel seen: -4.85m/s²
 
-      if self.frame % 2 == 0:
+      # stand in for the radar for exactly as long as it is off the bus
+      if self.radar_disabled and not self.radar_released and self.frame % 2 == 0:
         can_sends.append(create_HS2_DYN1_MDD_ETAT_2B6(self.packer, self.frame // 2, actuators.accel, CS.out.cruiseState.enabled,
                                                       CS.out.gasPressed, braking, CS.out.brakePressed, CS.out.standstill, torque))
         can_sends.append(create_HS2_DYN_MDD_ETAT_2F6(self.packer, braking, CC.hudControl.leadVisible, self.bars))

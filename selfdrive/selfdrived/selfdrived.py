@@ -56,6 +56,18 @@ MonitoringPolicy = log.DriverMonitoringState.MonitoringPolicy
 StarPilotEventName = custom.StarPilotOnroadEvent.EventName
 
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
+VALID_ONLY_COMM_ISSUE_GRACE_FRAMES = max(1, round(0.5 / DT_CTRL))
+
+
+def evaluate_comm_issue(all_checks: bool, all_alive: bool, all_freq_ok: bool,
+                        valid_only_frames: int) -> tuple[bool, int]:
+  if all_checks:
+    return False, 0
+  if not all_alive or not all_freq_ok:
+    return True, 0
+
+  valid_only_frames += 1
+  return valid_only_frames >= VALID_ONLY_COMM_ISSUE_GRACE_FRAMES, valid_only_frames
 
 
 def commanded_torque_at_max_for_saturation(CP, output: float) -> bool:
@@ -222,7 +234,13 @@ class SelfdriveD:
     self.last_functional_fan_frame = 0
     self.events_prev = []
     self.logged_comm_issue = None
+    self.valid_only_comm_issue_frames = 0
     self.not_running_prev = None
+    self.big_model_loading = False
+    self.big_model_attempted = False
+    self.big_model_active = False
+    self.big_model_failed = False
+    self.big_model_ready_t = 0.
     self.experimental_mode = False
     self.ecu_disable_failed = False
     self.ecu_disable_failed_checked = not (
@@ -292,11 +310,9 @@ class SelfdriveD:
       self.ecu_disable_failed = self.params.get_bool("EcuDisableFailed")
       self.ecu_disable_failed_checked = True
       if self.ecu_disable_failed:
-        fallback_cp = messaging.log_from_bytes(self.params.get("CarParams"), car.CarParams)
-        fallback_fpcp = messaging.log_from_bytes(self.params.get("StarPilotCarParams"), custom.StarPilotCarParams)
-        self.CP.openpilotLongitudinalControl = fallback_cp.openpilotLongitudinalControl
-        self.CP.pcmCruise = fallback_cp.pcmCruise
-        self.FPCP = fallback_fpcp
+        self.CP = messaging.log_from_bytes(self.params.get("CarParams"), car.CarParams)
+        self.FPCP = messaging.log_from_bytes(self.params.get("StarPilotCarParams"), custom.StarPilotCarParams)
+        self.car_events = CarSpecificEvents(self.CP)
 
   def clear_longitudinal_excessive_actuation_alert(self):
     alert = self.params.get("Offroad_ExcessiveActuation")
@@ -346,6 +362,27 @@ class SelfdriveD:
     if self.sm['controlsState'].lateralControlState.which() == 'debugState':
       self.events.add(EventName.joystickDebug)
       self.startup_event = None
+
+    loading = self.params.get_bool("UsbGpuLoading")
+    if loading:
+      self.big_model_attempted = True
+    if self.big_model_loading and not loading:
+      self.big_model_ready_t = time.monotonic()
+    self.big_model_loading = loading
+    if loading:
+      self.events.add(EventName.bigModelLoading)
+
+    big_active = self.params.get("UsbGpuActive")
+    model_unavailable = self.big_model_active and self.sm.seen['modelV2'] and not self.sm.alive['modelV2']
+    big_failed = self.big_model_attempted and not loading and (big_active is False or model_unavailable)
+    if big_failed and not self.big_model_failed:
+      self.events.add(EventName.bigModelFailed)
+    self.big_model_failed = big_failed
+
+    if big_active:
+      self.big_model_active = True
+    if not self.enabled and not model_unavailable:
+      self.big_model_active = False
 
     if self.sm.recv_frame['lateralManeuverPlan'] > 0:
       self.starpilot_events.add(StarPilotEventName.lateralManeuver)
@@ -478,7 +515,7 @@ class SelfdriveD:
           self.events.add(EventName.pedalPressed)
 
     # Create events for temperature, disk space, and memory
-    if self.sm['deviceState'].thermalStatus >= ThermalStatus.red:
+    if self.sm['deviceState'].thermalStatus >= ThermalStatus.overheated:
       self.events.add(EventName.overheat)
     if self.sm['deviceState'].freeSpacePercent < 7 and not SIMULATION:
       self.events.add(EventName.outOfSpace)
@@ -590,6 +627,9 @@ class SelfdriveD:
     # All events here should at least have NO_ENTRY and SOFT_DISABLE.
     num_events = len(self.events)
 
+    if self.big_model_active and big_failed:
+      self.events.add(EventName.bigModelFailed)
+
     not_running = {p.name for p in self.sm['managerState'].processes if not p.running and p.shouldBeRunning}
     if self.sm.recv_frame['managerState'] and len(not_running):
       if not_running != self.not_running_prev:
@@ -623,10 +663,17 @@ class SelfdriveD:
                          (contains_event_type(self.events, self.starpilot_events, ET.SOFT_DISABLE) or
                           contains_event_type(self.events, self.starpilot_events, ET.IMMEDIATE_DISABLE))
     no_system_errors = (not has_disable_events) or (len(self.events) == num_events)
-    if not self.sm.all_checks() and no_system_errors:
-      if not self.sm.all_alive():
+    big_model_settling = self.big_model_loading or time.monotonic() < self.big_model_ready_t + 5.
+    all_checks = self.sm.all_checks()
+    all_alive = self.sm.all_alive() if not all_checks else True
+    all_freq_ok = self.sm.all_freq_ok() if not all_checks else True
+    report_comm_issue, self.valid_only_comm_issue_frames = evaluate_comm_issue(
+      all_checks, all_alive, all_freq_ok, self.valid_only_comm_issue_frames,
+    )
+    if not all_checks and report_comm_issue and no_system_errors and not big_model_settling:
+      if not all_alive:
         self.events.add(EventName.commIssue)
-      elif not self.sm.all_freq_ok():
+      elif not all_freq_ok:
         self.events.add(EventName.commIssueAvgFreq)
       else:
         self.events.add(EventName.commIssue)
@@ -642,7 +689,7 @@ class SelfdriveD:
     else:
       self.logged_comm_issue = None
 
-    if not self.CP.notCar:
+    if not self.CP.notCar and not big_model_settling:
       if not self.sm['livePose'].posenetOK:
         self.events.add(EventName.posenetInvalid)
       if not self.sm['livePose'].inputsOK:

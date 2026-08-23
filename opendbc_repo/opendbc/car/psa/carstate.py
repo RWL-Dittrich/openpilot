@@ -15,13 +15,18 @@ RADAR_MSG = 'HS2_DYN1_MDD_ETAT_2B6'
 # whole of it lands inside the ADAS bus silence the knockout opens up: the emulation
 # only starts once this has expired. The ESP (UC_FREIN) marks its ACC fields invalid
 # after ~150 ms without 0x2B6, so this has to be a fraction of that budget, not all
-# of it. 15 frames (150 ms) spent the budget exactly and faulted the car on route
-# 00000031--72ac22ec75 — the ESP flagged 152 ms after the radar's last frame, 21 ms
-# before the emulation's first. Bound below by the message's own jitter: 20.2 ms
+# of it. 15 frames (150 ms) spent the budget exactly and faulted the car — the ESP
+# flagged 152 ms after the radar's last frame, 21 ms before the emulation's first.
+# Bound below by the message's own jitter: 20.2 ms
 # median, 35.4 ms worst over 4932 frames across 4 routes. 6 frames is 1.7x that worst
 # gap, and holds the total silence to ~70 ms.
 RADAR_TIMEOUT_FRAMES = 6
 
+# SPEED_SETPOINT reads 2 km/h below the set speed shown on the dash — driver-observed, and the
+# same at every set speed. The car regulates to the value on the bus, absorbing the speedometer's
+# over-read, so that value stays the control target and only the cluster display is corrected;
+# without this openpilot's own set speed sits a step below the dash's for the whole drive.
+CLUSTER_SETPOINT_OFFSET = 2  # km/h
 
 class CarState(CarStateBase):
   def __init__(self, CP, FPCP):
@@ -67,7 +72,10 @@ class CarState(CarStateBase):
     self.eps_active = cp.vl['IS_DAT_DIRA']['EPS_STATE_LKA'] == 3 # 0: Unauthorized, 1: Authorized, 2: Available, 3: Active, 4: Defect
 
     # cruise
-    ret.cruiseState.speed = cp_adas.vl['HS2_DAT_MDD_CMD_452']['SPEED_SETPOINT'] * CV.KPH_TO_MS # set to 255 when ACC is off, -2 kph offset from dash speed
+    setpoint = cp_adas.vl['HS2_DAT_MDD_CMD_452']['SPEED_SETPOINT']  # set to 255 when ACC is off
+    ret.cruiseState.speed = setpoint * CV.KPH_TO_MS
+    # show what the dash shows, see CLUSTER_SETPOINT_OFFSET; with ACC off there is nothing to offset
+    ret.cruiseState.speedCluster = (setpoint + CLUSTER_SETPOINT_OFFSET) * CV.KPH_TO_MS if setpoint < 255 else ret.cruiseState.speed
     ret.cruiseState.enabled = cp_adas.vl['HS2_DAT_MDD_CMD_452']['RVV_ACC_ACTIVATION_REQ'] == 1
     ret.cruiseState.available = True # not available for CC-only
     ret.cruiseState.nonAdaptive = False # not available for CC-only

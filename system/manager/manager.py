@@ -27,6 +27,7 @@ import cereal.messaging as messaging
 import openpilot.system.sentry as sentry
 from openpilot.common.utils import atomic_write
 from openpilot.common.params import Params, ParamKeyFlag, ParamKeyType
+from openpilot.common.spinner import Spinner
 from openpilot.common.text_window import TextWindow
 from openpilot.system.hardware import HARDWARE
 from openpilot.system.manager.helpers import unblock_stdout, write_onroad_params, save_bootlog
@@ -78,7 +79,18 @@ STARPILOT_STATS_DROP_KEYS = {"CurrentMonthsKilometers", "ResetStats"}
 STARPILOT_STATS_MAX_KEYS = {"LongestDistanceWithoutOverride", "MaxAcceleration"}
 
 
+# Startup spinner: a loading bar drawn over the boot logo while manager_init runs.
+# Progress advances on every _log_boot_timing("manager_init", ...) checkpoint.
+_STARTUP_SPINNER: Spinner | None = None
+_STARTUP_INIT_STEPS = 17  # number of manager_init checkpoints; drift just ends the bar short of 100%
+_startup_steps_seen = 0
+
+
 def _log_boot_timing(scope: str, label: str, start: float, previous: float | None = None) -> float:
+  global _startup_steps_seen
+  if scope == "manager_init" and _STARTUP_SPINNER is not None:
+    _startup_steps_seen += 1
+    _STARTUP_SPINNER.update_progress(_startup_steps_seen, _STARTUP_INIT_STEPS)
   now = time.monotonic()
   base = previous if previous is not None else start
   line = f"SP_BOOT_TIMING {scope} {label} +{now - base:.3f}s total={now - start:.3f}s"
@@ -973,6 +985,10 @@ def cleanup_inaccessible_msgq_files(shm_path: str | Path) -> int:
 
 
 def manager_init() -> None:
+  global _STARTUP_SPINNER
+  if os.getenv("PREPAREONLY") is None:
+    _STARTUP_SPINNER = Spinner(startup=True)
+
   manager_init_start = time.monotonic()
   last_timing = _log_boot_timing("manager_init", "start", manager_init_start, manager_init_start)
 
@@ -1069,7 +1085,7 @@ def manager_init() -> None:
   last_timing = _log_boot_timing("manager_init", "version_params", manager_init_start, last_timing)
 
   # set dongle id
-  reg_res = register(show_spinner=True)
+  reg_res = register(show_spinner=_STARTUP_SPINNER is None)
   if reg_res:
     dongle_id = reg_res
   else:
@@ -1240,7 +1256,14 @@ def manager_thread() -> None:
 
 
 def main() -> None:
-  manager_init()
+  global _STARTUP_SPINNER
+  try:
+    manager_init()
+  finally:
+    # close before the UI process spawns and takes over the display, even if init failed
+    if _STARTUP_SPINNER is not None:
+      _STARTUP_SPINNER.close()
+      _STARTUP_SPINNER = None
   if os.getenv("PREPAREONLY") is not None:
     return
 

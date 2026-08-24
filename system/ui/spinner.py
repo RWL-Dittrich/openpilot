@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 from dataclasses import dataclass
+import os
 import pyray as rl
 import select
 import sys
 
+from openpilot.common.basedir import BASEDIR
 from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.text import wrap_text
@@ -52,15 +54,26 @@ SMALL_MAX_WRAPPED_LINES = 4
 PROGRESS_LABEL_SPACING = 12
 DARKGRAY = (55, 55, 55, 255)
 
+# --startup draws the same image the boot screen shows, so the progress bar
+# appears over the boot logo instead of switching to the spinner graphic
+STARTUP_LOGO_PATHS = [
+  "/usr/comma/bg.jpg",  # boot logo StarPilot installs (follows the selected boot logo theme)
+  "/usr/comma/bg.png",
+  os.path.join(BASEDIR, "starpilot/assets/other_images/starpilot_boot_logo.jpg"),
+]
+
 
 def clamp(value, min_value, max_value):
   return max(min(value, max_value), min_value)
 
 
 class Spinner(Widget):
-  def __init__(self):
+  def __init__(self, startup_logo: str | None = None):
     super().__init__()
     self._theme = BIG_THEME if gui_app.big_ui() else SMALL_THEME
+    self._startup_texture = gui_app.texture(startup_logo) if startup_logo else None
+    if self._startup_texture is not None and (self._startup_texture.width == 0 or self._startup_texture.height == 0):
+      self._startup_texture = None  # decode failed; fall back to the classic spinner
     self._comma_texture = gui_app.texture("images/spinner_comma.png", self._theme.texture_size, self._theme.texture_size)
     self._spinner_texture = gui_app.texture("images/spinner_track.png", self._theme.texture_size, self._theme.texture_size, alpha_premultiply=True)
     self._rotation = 0.0
@@ -118,7 +131,31 @@ class Spinner(Widget):
     )
     rl.draw_texture_v(self._comma_texture, comma_position, rl.WHITE)
 
+  def _render_startup(self, rect: rl.Rectangle) -> None:
+    tex = self._startup_texture
+    if gui_app.big_ui():
+      # cover the screen: pixel-identical to the boot logo, the bar just appears on it
+      scale = max(rect.width / tex.width, rect.height / tex.height)
+    else:
+      # small screen is wider than the logo: contain it, scaled down enough that the
+      # default logo's low-sitting artwork stays clear of the bar
+      scale = min(rect.width / tex.width, rect.height / tex.height) * 0.85
+    pos = rl.Vector2(rect.x + (rect.width - tex.width * scale) / 2.0, rect.y + (rect.height - tex.height * scale) / 2.0)
+    rl.draw_texture_ex(tex, pos, 0.0, scale, rl.WHITE)
+
+    if self._progress is not None:
+      bar_width = min(self._theme.progress_bar_width, rect.width - 2 * self._theme.horizontal_margin)
+      y_pos = rect.y + rect.height - self._theme.horizontal_margin - self._theme.progress_bar_height
+      bar = rl.Rectangle(rect.x + (rect.width - bar_width) / 2.0, y_pos, bar_width, self._theme.progress_bar_height)
+      rl.draw_rectangle_rounded(bar, 1, 10, DARKGRAY)
+      bar.width *= self._progress / 100.0
+      rl.draw_rectangle_rounded(bar, 1, 10, rl.WHITE)
+
   def _render(self, rect: rl.Rectangle):
+    if self._startup_texture is not None:
+      self._render_startup(rect)
+      return
+
     total_height = self._content_height()
     top_y = rect.y + (rect.height - total_height) / 2.0
     center_x = rect.x + rect.width / 2.0
@@ -172,8 +209,10 @@ def _read_stdin():
 
 
 def main():
+  startup = "--startup" in sys.argv[1:]
   gui_app.init_window("Spinner")
-  spinner = Spinner()
+  logo = next((p for p in STARTUP_LOGO_PATHS if os.path.exists(p)), None) if startup else None
+  spinner = Spinner(startup_logo=logo)
   for _ in gui_app.render():
     text_list = _read_stdin()
     if text_list:

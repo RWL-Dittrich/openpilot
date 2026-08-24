@@ -236,6 +236,9 @@ POST_DEPARTURE_FOLLOW_SETTLE_ARM_MIN_LEAD_DELTA = -0.10
 POST_DEPARTURE_FOLLOW_SETTLE_ARM_MIN_LEAD_ACCEL = 0.20
 POST_DEPARTURE_FOLLOW_SETTLE_ARM_MIN_HEADWAY_MARGIN = 0.08
 POST_DEPARTURE_FOLLOW_SETTLE_COMPLETE_HEADWAY_MARGIN = 0.05
+# Launch bypass for vision-only cars
+LAUNCH_FOLLOW_BYPASS_TIME = 10.0  # s after a standstill departure
+LAUNCH_FOLLOW_BYPASS_MAX_SPEED = 8.0  # m/s
 
 # Uncertainty-based filter disable thresholds
 UNCERT_SLOPE_TRIG = 0.12  # per second
@@ -590,6 +593,7 @@ class LongitudinalPlanner:
     self.lead_depart_accel_hold_until = 0.0
     self.lead_depart_accel_hold_floor = None
     self.post_departure_follow_settle_until = 0.0
+    self.launch_follow_bypass_until = 0.0
     self.duplicate_vision_comfort_lead_source = None
     self.prev_experimental_mode = None
     self.experimental_release_accel_until = 0.0
@@ -2555,6 +2559,7 @@ class LongitudinalPlanner:
     if lead_control_active and lead_depart_ready and not depart_safety_veto and not output_should_stop and float(sm['carState'].vEgo) <= STANDSTILL_LEAD_DEPART_MAX_EGO_SPEED:
       output_a_target = max(output_a_target, STANDSTILL_LEAD_DEPART_MIN_ACCEL)
       self.post_departure_follow_settle_until = now_t + POST_DEPARTURE_FOLLOW_SETTLE_LATCH_TIME
+      self.launch_follow_bypass_until = now_t + LAUNCH_FOLLOW_BYPASS_TIME
 
     if radar_gap_settle_active:
       vision_low_speed_stop_active = False
@@ -2582,6 +2587,7 @@ class LongitudinalPlanner:
     if depart_safety_veto or output_should_stop or bool(getattr(sm['starpilotPlan'], 'forcingStop', False)) or bool(getattr(sm['starpilotPlan'], 'redLight', False)):
       self.lead_depart_accel_hold_until = 0.0
       self.lead_depart_accel_hold_floor = None
+      self.launch_follow_bypass_until = 0.0
 
     lead_depart_accel_floor = None
     lead_depart_accel_floor_reused = False
@@ -2698,7 +2704,9 @@ class LongitudinalPlanner:
     # cruise branch request full acceleration before the next lead was stable.
     # Keep the normal catch-up cap on this car; urgent braking remains outside
     # this comfort policy and is still allowed through unchanged.
-    post_departure_bypass = post_departure_active and not is_toyota_rav4_tss2_post_departure_tune(self.CP)
+    launch_follow_bypass = (now_t < self.launch_follow_bypass_until and
+                            float(sm['carState'].vEgo) <= LAUNCH_FOLLOW_BYPASS_MAX_SPEED)
+    post_departure_bypass = (post_departure_active and not is_toyota_rav4_tss2_post_departure_tune(self.CP)) or launch_follow_bypass
     follow_result = apply_follow_policy(
       self.lead_one,
       self.lead_two,

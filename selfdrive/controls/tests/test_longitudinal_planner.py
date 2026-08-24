@@ -1438,6 +1438,58 @@ def test_acc_mode_tracked_pace_matched_lead_caps_positive_catchup(model_version)
   assert planner_with_lead.output_a_target < 0.08
 
 
+def test_launch_follow_bypass_reaches_the_follow_policy(monkeypatch):
+  # a standstill departure behind a vision-only lead sits inside the low-speed catch-up
+  # cap's domain (near the gap target, below 12 m/s), pinning the target at 0.55 m/s²
+  # while the lead runs off; for LAUNCH_FOLLOW_BYPASS_TIME after a departure the planner
+  # hands the follow policy post_departure=True, which returns the raw MPC target
+  # (bypass behavior itself is covered by test_follow_policy_bypasses_post_departure_handoff)
+  v_ego = 2.5
+
+  captured = {}
+  real_apply = longitudinal_planner_module.apply_follow_policy
+
+  def spy(*args, **kwargs):
+    captured['post_departure'] = kwargs['post_departure']
+    return real_apply(*args, **kwargs)
+
+  monkeypatch.setattr(longitudinal_planner_module, "apply_follow_policy", spy)
+
+  CP = CarInterface.get_non_essential_params(CAR.HONDA_CIVIC)
+  planner = LongitudinalPlanner(CP, init_v=v_ego)
+
+  def departing_sm():
+    return make_sm(
+      v_ego,
+      desired_accel=1.5,
+      min_accel=-1.0,
+      experimental_mode=False,
+      tracking_lead=True,
+      lead_one=make_lead(status=True, d_rel=9.0, v_lead=5.0, a_lead=0.8, radar=False, model_prob=0.98),
+    )
+
+  planner.launch_follow_bypass_until = 0.0
+  planner.update(departing_sm(), make_toggles())
+  assert captured['post_departure'] is False, "bypassed the follow policy with no departure window armed"
+
+  planner.launch_follow_bypass_until = time.monotonic() + 5.0
+  planner.update(departing_sm(), make_toggles())
+  assert captured['post_departure'] is True
+
+  # past the speed where the ordinary post-departure settle takes over, the launch window no longer bypasses
+  fast = make_sm(
+    10.0,
+    desired_accel=1.5,
+    min_accel=-1.0,
+    experimental_mode=False,
+    tracking_lead=True,
+    lead_one=make_lead(status=True, d_rel=25.0, v_lead=12.0, a_lead=0.1, radar=False, model_prob=0.98),
+  )
+  planner.launch_follow_bypass_until = time.monotonic() + 5.0
+  planner.update(fast, make_toggles())
+  assert captured['post_departure'] is False
+
+
 @pytest.mark.parametrize("model_version", ["v11", "v12", "v13", "v14", "v15"])
 def test_acc_mode_low_speed_vision_stop_buffer_sets_should_stop_before_tiny_gap(model_version):
   v_ego = 3.8

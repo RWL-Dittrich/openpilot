@@ -27,7 +27,7 @@ class CarControllerParams:
     MAX_LATERAL_ACCEL=MAX_LATERAL_ACCEL,
     MAX_LATERAL_JERK=MAX_LATERAL_JERK,
     # limit angle rate for low speed comfort, matches previous breakpoint-based rate limits at a standstill
-    MAX_ANGLE_RATE=3,  # deg/10ms frame
+    MAX_ANGLE_RATE=4,  # deg/10ms frame
   )
   STEER_DRIVER_ALLOWANCE = 5  # Driver intervention threshold, 0.5 Nm
 

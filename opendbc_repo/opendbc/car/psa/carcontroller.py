@@ -43,12 +43,6 @@ RADAR_ENABLE_TIMEOUT_FRAMES = 200  # 2.0 s
 DRIVE_AWAY_FRAMES = 4   # 40 ms at 100 Hz
 LAUNCH_COMPLETE_SPEED = 0.5  # m/s, decel request released above this
 
-# Torque floor while the ESP is still holding the car. The stock radar opened its launches
-# with 458-939 N.m (six drive-aways) and advertised 700-1000 N.m of potential wheel torque
-# throughout the hold; the accel map alone asks ~320 N.m at the planner's first positive
-# command, below anything the stock radar was seen to use to get the car moving.
-LAUNCH_TORQUE = 600  # N.m
-
 # The planner's cruise source is a plain P controller on speed error clipped at
 # A_CRUISE_MIN, so a 4.3 km/h set-speed step already saturates it at -1.2 m/s², and its own
 # jerk limiter runs while disengaged too — measured pinned at -1.20 for the whole second
@@ -174,10 +168,14 @@ class CarController(CarControllerBase):
     pitch = CC.orientationNED[1] if len(CC.orientationNED) == 3 else 0.0
     accel_slope = math.sin(pitch) * 9.81
 
-    # rate-limit how fast a deceleration request may build, see DECEL_BUILD_RATE_BP
+    # rate-limit how fast a deceleration request may build, see DECEL_BUILD_RATE_BP.
+    # Only below zero: a positive command coming down is released in one frame, or a
+    # single-frame planner spike (longcontrol fires startAccel for one frame on any
+    # re-engage, e.g. releasing a gas override) would be walked off at the comfort
+    # rate and hold unrequested drive torque for over a second
     if CC.longActive:
       build_rate = interp(actuators.accel, DECEL_BUILD_RATE_BP, DECEL_BUILD_RATE_V)
-      self.accel_last = max(actuators.accel, self.accel_last - build_rate)
+      self.accel_last = max(actuators.accel, min(self.accel_last, 0.0) - build_rate)
       accel = self.accel_last
     else:
       # keep the limiter primed with the car's own deceleration so the next engage builds
@@ -283,12 +281,6 @@ class CarController(CarControllerBase):
         self.hold = True
       drive_away = self.drive_away_frames > 0
       standstill_hold = self.hold or drive_away
-
-      # the brakes are still on their way out through the launch, so ask for at least what
-      # the stock radar used to break the hold, and advertise it as potential torque while
-      # holding — the map's own value only takes over once it climbs past the floor
-      if standstill_hold or self.launching:
-        torque = max(torque, LAUNCH_TORQUE)
 
       # stand in for the radar for exactly as long as it is off the bus
       if self.radar_disabled and not self.radar_released and self.frame % 2 == 0:

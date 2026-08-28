@@ -7,7 +7,7 @@ from opendbc.can import CANParser, CANPacker
 from opendbc.car import DT_CTRL, structs
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.psa.carcontroller import (DECEL_BUILD_RATE_V, LAUNCH_TORQUE, RADAR_DISABLE_FRAME,
+from opendbc.car.psa.carcontroller import (DECEL_BUILD_RATE_V, RADAR_DISABLE_FRAME,
                                           RADAR_ENABLE_TIMEOUT_FRAMES)
 from opendbc.car.psa.carstate import CLUSTER_SETPOINT_OFFSET, RADAR_TIMEOUT_FRAMES
 
@@ -383,7 +383,7 @@ class TestPsaBrakeOverride(PsaEmulationTest):
     self.assertAlmostEqual(msg['MDD_DESIRED_DECELERATION'], -10.65, places=1)
     self.assertEqual(int(msg['WHEEL_TORQUE_REQUEST']), 0)
     self.assertEqual(int(msg['ACC_STATUS']), 4)
-    self.assertGreaterEqual(msg['GMP_POTENTIAL_WHEEL_TORQUE'], LAUNCH_TORQUE)
+    self.assertGreater(msg['GMP_POTENTIAL_WHEEL_TORQUE'], -4000, "hold did not advertise a real potential torque")
 
     # planner wants to move: the pulse goes up while 0x2B6 stays in the hold pattern
     b6, f6 = self.emulated_pair(long_active=True, accel=0.3, standstill=True)
@@ -396,7 +396,7 @@ class TestPsaBrakeOverride(PsaEmulationTest):
       b6, f6 = self.emulated_pair(long_active=True, accel=0.3, standstill=True)
     self.assertEqual(int(f6['DRIVE_AWAY_REQUEST']), 0)
     self.assertEqual(int(b6['WHEEL_TORQUE_REQUEST']), 1)
-    self.assertGreaterEqual(b6['GMP_WHEEL_TORQUE'], LAUNCH_TORQUE, "launched under the torque the ESP releases on")
+    self.assertGreater(b6['GMP_WHEEL_TORQUE'], 0, "launched with no positive wheel torque")
     self.assertEqual(int(b6['MDD_DECEL_CONTROL_REQ']), 1)
     self.assertAlmostEqual(b6['MDD_DESIRED_DECELERATION'], 2.0, places=1)
 
@@ -525,6 +525,16 @@ class TestPsaDecelBuildRate(PsaEmulationTest):
 
     self.step(long_active=True, accel=1.0)
     self.assertEqual(self.CI.CC.accel_last, 1.0, "rate limited the accelerator")
+
+  def test_a_positive_spike_is_not_walked_down(self):
+    # longcontrol's starting state fires startAccel for a single frame on a re-engage
+    # (e.g. releasing a gas override); stretching that frame into a ramp through the
+    # positive band held ~900 N.m of unrequested drive torque for over a second
+    self.knock_out()
+    self.step(long_active=True, accel=1.5, v_ego=11.0)
+    msg = self.emulated(long_active=True, accel=0.0, v_ego=11.0)
+    self.assertLessEqual(self.CI.CC.accel_last, 0.0, "held the spike's request after the plan dropped it")
+    self.assertLess(msg['GMP_WHEEL_TORQUE'], 200, "the spike's torque was still on the bus")
 
 
 class TestPsaClusterSetSpeed(unittest.TestCase):

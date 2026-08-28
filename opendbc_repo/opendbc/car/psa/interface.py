@@ -55,6 +55,6 @@ class CarInterface(CarInterfaceBase):
 
     # no integrator below ~50 km/h: only feedforward + startAccel handle pull-away
     ret.longitudinalTuning.kiBP = [13, 15, 20]
-    ret.longitudinalTuning.kiV = [0., .5, .8]
+    ret.longitudinalTuning.kiV = [0.3, .5, .8]
 
     return ret

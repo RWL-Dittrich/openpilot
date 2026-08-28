@@ -53,7 +53,8 @@ class CarInterface(CarInterfaceBase):
     # long tuning
     ret.longitudinalActuatorDelay = 0.25
 
-    ret.longitudinalTuning.kiBP = [0.]
-    ret.longitudinalTuning.kiV = [1.0]
+    # no integrator below ~10 km/h: only feedforward + startAccel handle pull-away
+    ret.longitudinalTuning.kiBP = [2.8, 3.1]
+    ret.longitudinalTuning.kiV = [0., .8]
 
     return ret

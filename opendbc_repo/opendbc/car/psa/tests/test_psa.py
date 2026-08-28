@@ -531,8 +531,8 @@ class TestPsaClusterSetSpeed(unittest.TestCase):
   """openpilot's set speed has to read the same as the number on the dash.
 
   The bus carries a setpoint 2 km/h below the displayed one, which is what the car regulates
-  to, so the display is corrected and the control target is left alone — see
-  CLUSTER_SETPOINT_OFFSET.
+  to, so the display is corrected — see CLUSTER_SETPOINT_OFFSET. The control target is scaled
+  by wheelSpeedFactor so we hold the same physical wheel speed stock ACC would.
   """
 
   def setUp(self):
@@ -552,7 +552,7 @@ class TestPsaClusterSetSpeed(unittest.TestCase):
   def test_cluster_set_speed_matches_the_dash(self):
     for kph in (50, 82, 130):
       CS = self.setpoint(kph)
-      self.assertAlmostEqual(CS.cruiseState.speed * CV.MS_TO_KPH, kph, places=3,
+      self.assertAlmostEqual(CS.cruiseState.speed * CV.MS_TO_KPH, kph * self.CI.CP.wheelSpeedFactor, places=3,
                              msg="control target no longer follows the value the car regulates to")
       self.assertAlmostEqual(CS.cruiseState.speedCluster * CV.MS_TO_KPH, kph + CLUSTER_SETPOINT_OFFSET, places=3,
                              msg="the displayed set speed is a step off the dash")

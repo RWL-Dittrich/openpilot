@@ -73,7 +73,10 @@ class CarState(CarStateBase):
 
     # cruise
     setpoint = cp_adas.vl['HS2_DAT_MDD_CMD_452']['SPEED_SETPOINT']  # set to 255 when ACC is off
-    ret.cruiseState.speed = setpoint * CV.KPH_TO_MS
+    # the setpoint is the wheel-speed value the stock system regulates to; vEgo is wheel speed
+    # * wheelSpeedFactor, so scale the target the same way or cruise settles that factor below
+    # the speed stock ACC would hold for the same setpoint
+    ret.cruiseState.speed = setpoint * CV.KPH_TO_MS * self.CP.wheelSpeedFactor
     # show what the dash shows, see CLUSTER_SETPOINT_OFFSET; with ACC off there is nothing to offset
     ret.cruiseState.speedCluster = (setpoint + CLUSTER_SETPOINT_OFFSET) * CV.KPH_TO_MS if setpoint < 255 else ret.cruiseState.speed
     ret.cruiseState.enabled = cp_adas.vl['HS2_DAT_MDD_CMD_452']['RVV_ACC_ACTIVATION_REQ'] == 1
